@@ -1,10 +1,10 @@
-KERNEL_DIR=../r8712u
+KERNEL_DIR=/lib/modules/$(shell uname -r)/build
 
 obj-m := wiegand-gpio.o
 PWD := $(shell pwd)
 
 all: wiegand-gpio.c
-	$(MAKE) ARCH=arm CROSS_COMPILE=arm-linux- -C $(KERNEL_DIR) SUBDIRS=$(PWD) modules
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 
 clean:
-	make -C $(KERNEL_DIR) SUBDIRS=$(PWD) clean
+	make -C $(KERNEL_DIR) M=$(PWD) clean

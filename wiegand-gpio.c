@@ -2,6 +2,7 @@
  * 
  * Wiegand driver using GPIO an interrupts. 
  *
+ * Modified Nov 2020 mkotyk for RPI GPIO
  */
 
 /* Standard headers for LKMs */
@@ -18,9 +19,13 @@
 #include <linux/interrupt.h>
 
 #include <asm/irq.h>
-#include <mach/gpio.h>
+#include <linux/gpio.h>
 
 #define MAX_WIEGAND_BYTES 6
+
+#define W0		17
+#define W1		18
+#define LED		19
 
 static struct wiegand
 {
@@ -36,8 +41,7 @@ wiegand;
 
 static struct timer_list timer;
 
-static ssize_t wiegandShow(
-  struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+static ssize_t wiegandShow(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
   return sprintf(
     buf, "%.5d:%.3d:%.5d\n", 
@@ -47,8 +51,7 @@ static ssize_t wiegandShow(
   );
 }
 
-static struct kobj_attribute wiegand_attribute =
-  __ATTR(read, 0666, wiegandShow, NULL);
+static struct kobj_attribute wiegand_attribute = __ATTR(read, 0660, wiegandShow, NULL);
 
 static struct attribute *attrs[] = 
 {
@@ -103,26 +106,26 @@ bool checkParity(char *buffer, int numBytes, int parityCheck)
   return (parity % 2) == 1;
 }
 
-void wiegand_timer(unsigned long data) 
+static void wiegand_timer(struct timer_list* timer) 
 {
   char *lcn;
-  struct wiegand *w = (struct wiegand *) data;
+  struct wiegand *w = &wiegand;
   int numBytes = w->currentBit / 16;
   int endParity = w->buffer[w->currentBit / 8] & (0x80 >> w->currentBit % 8);
 
-  printk("wiegand read complete\n");
+  printk(KERN_DEBUG "wiegand read complete");
  
   //check the start parity
   if (checkParity(w->buffer, numBytes, w->startParity))
   {
-    printk("start parity check failed\n");
+    printk(KERN_DEBUG "start parity check failed");
     return; 
   }
     
   //check the end parity
   if (!checkParity(&w->buffer[numBytes], numBytes, endParity))
   {
-    printk("end parity check failed\n");
+    printk(KERN_DEBUG "end parity check failed");
     return; 
   }
 
@@ -136,13 +139,13 @@ void wiegand_timer(unsigned long data)
   lcn[1] = w->buffer[1];
   w->readNum++;
   
-  printk(
-    "new read available: %d:%d\n", 
+  printk(KERN_DEBUG 
+    "new read available: %d:%d", 
     w->lastFacilityCode, 
     w->lastCardNumber);
   
   //turn off the green led
-  at91_set_gpio_value(AT91_PIN_PB28, 0);
+  gpio_set_value(LED, 0);
 
   //reset for next reading 
   wiegand_clear(w);  
@@ -152,59 +155,58 @@ int init_module()
 {
   int retval;
 
-  printk("wiegand intialising\n");
+  printk(KERN_INFO "wiegand intialising");
   
   wiegand_init(&wiegand);
+
+  if (gpio_request(W0, "W0")) 
+  {
+    printk(KERN_DEBUG "Could not request GPIO pin %i.", W0);
+    return -EIO;
+  }
+
+  if (gpio_request(W1, "W1"))
+  {
+    printk(KERN_DEBUG "Could not request GPIO pin %i.", W1);
+    return -EIO;
+  }
+
+  if (gpio_request(LED, "LED"))
+  {
+    printk(KERN_DEBUG "Could not request GPIO pin %i.", LED);
+    return -EIO;
+  }
+
+  if (gpio_direction_input(W0))
+  {
+    printk(KERN_DEBUG "Could not set GPIO pin %i as input.", W0);
+    return -EIO;
+  }
+
+  if (gpio_direction_input(W1))
+  {
+    printk(KERN_DEBUG "Could not set GPIO pin %i as input.", W1);
+    return -EIO;
+  }
+
+  if (gpio_direction_output(LED, 0))
+  {
+    printk(KERN_DEBUG "Could not set GPIO pin %i as output.", LED);
+    return -EIO;
+  }
+
+
   
-  if(at91_set_gpio_output(AT91_PIN_PB27, 1)) 
-  {
-    printk(KERN_DEBUG"Could not set pin %i for GPIO output.\n", AT91_PIN_PB27);
-    return -EIO;
-  }
-  if(at91_set_gpio_output(AT91_PIN_PB28, 1)) 
-  {
-    printk(KERN_DEBUG"Could not set pin %i for GPIO output.\n", AT91_PIN_PB28);
-    return -EIO;
-  }
- 
-  /** Set pin as GPIO input, with internal pull up */
-  if(at91_set_gpio_input(AT91_PIN_PB30, 1)) 
-  {
-    printk(KERN_DEBUG"Could not set pin %i for GPIO input.\n", AT91_PIN_PB30);
-    return -EIO;
-  }
-
-  /** Set pin as GPIO input, with internal pull up */
-  if(at91_set_gpio_input(AT91_PIN_PB31, 1)) 
-  {
-    printk(KERN_DEBUG"Could not set pin %i for GPIO input.\n", AT91_PIN_PB31);
-    return -EIO;
-  }
-
-  /** Set deglitch for pin */
-  if(at91_set_deglitch(AT91_PIN_PB30, 1)) 
-  {
-    printk(KERN_DEBUG"Could not set pin %i for GPIO deglitch.\n", AT91_PIN_PB30);
-    return -EIO;
-  }
-
-  /** Set deglitch for pin */
-  if(at91_set_deglitch(AT91_PIN_PB31, 1)) 
-  {
-    printk(KERN_DEBUG"Could not set pin %i for GPIO deglitch.\n", AT91_PIN_PB31);
-    return -EIO;
-  }
-      
   /** Request IRQ for pin */
-  if(request_irq(AT91_PIN_PB30, wiegand_data_isr, IRQF_TRIGGER_FALLING|IRQF_TRIGGER_RISING, "wiegand_data", &wiegand))
+  if(request_irq(gpio_to_irq(W0), wiegand_data_isr, IRQF_TRIGGER_FALLING|IRQF_TRIGGER_RISING, "wiegand_data", &wiegand))
   {
-    printk(KERN_DEBUG"Can't register IRQ %d\n", AT91_PIN_PB30);
+    printk(KERN_DEBUG"Can't register IRQ %d", W0);
     return -EIO;
   }
 
-  if(request_irq(AT91_PIN_PB31, wiegand_data_isr, IRQF_TRIGGER_FALLING|IRQF_TRIGGER_RISING, "wiegand_data", &wiegand))
+  if(request_irq(gpio_to_irq(W1), wiegand_data_isr, IRQF_TRIGGER_FALLING|IRQF_TRIGGER_RISING, "wiegand_data", &wiegand))
   {
-    printk(KERN_DEBUG"Can't register IRQ %d\n", AT91_PIN_PB31);
+    printk(KERN_DEBUG"Can't register IRQ %d", W1);
     return -EIO;
   }
   
@@ -213,7 +215,7 @@ int init_module()
   
   if (!wiegandKObj)
   { 
-    printk("wiegand failed to create sysfs\n");
+    printk(KERN_DEBUG "wiegand failed to create sysfs");
     return -ENOMEM;
   } 
 
@@ -224,15 +226,12 @@ int init_module()
   }
   
   //setup the timer
-  init_timer(&timer);
-  timer.function = wiegand_timer;
-  timer.data = (unsigned long) &wiegand;
+  timer_setup(&timer, wiegand_timer, 0);
   
   //turn off leds 
-  at91_set_gpio_value(AT91_PIN_PB27, 0);
-  at91_set_gpio_value(AT91_PIN_PB28, 0);
+  gpio_set_value(LED, 0);
 
-  printk("wiegand ready\n");
+  printk(KERN_INFO "wiegand ready");
   return retval;  
 }
 
@@ -240,8 +239,8 @@ irqreturn_t wiegand_data_isr(int irq, void *dev_id)
 {
   struct wiegand *w = (struct wiegand *)dev_id;  
 
-  int data0 = at91_get_gpio_value(AT91_PIN_PB30);
-  int data1 = at91_get_gpio_value(AT91_PIN_PB31);
+  int data0 = gpio_get_value(W0);
+  int data1 = gpio_get_value(W1);
   int value = ((data0 == 1) && (data1 == 0)) ? 0x80 : 0;
 
   if ((data0 == 1) && (data1 == 1))
@@ -255,12 +254,12 @@ irqreturn_t wiegand_data_isr(int irq, void *dev_id)
   //this is the start parity bit 
   if (w->currentBit == 0)
   {
-    at91_set_gpio_value(AT91_PIN_PB28, 1);    
+    gpio_set_value(LED, 1);    
     w->startParity = value;
   }
   else
   {
-value ? printk("1 ") : printk("0 "); 
+    value ? printk("1 ") : printk("0 "); 
     w->buffer[(w->currentBit-1) / 8] |= (value >> ((w->currentBit-1) % 8)); 
   }
 
@@ -268,8 +267,7 @@ value ? printk("1 ") : printk("0 ");
 
   //if we don't get another interrupt for 50ms we
   //assume the data is complete.   
-  timer.expires = jiffies + msecs_to_jiffies(50);
-  add_timer(&timer);
+  mod_timer(&timer, jiffies + msecs_to_jiffies(50));
 
   return IRQ_HANDLED;
 }
@@ -279,9 +277,13 @@ void cleanup_module()
   kobject_put(wiegandKObj);
   del_timer(&timer);
 
-  free_irq(AT91_PIN_PB30, &wiegand);
-  free_irq(AT91_PIN_PB31, &wiegand);
-  printk("wiegand removed\n");
+  free_irq(gpio_to_irq(W0), &wiegand);
+  free_irq(gpio_to_irq(W1), &wiegand);
+
+  gpio_free(W0);
+  gpio_free(W1);
+  gpio_free(LED);
+  printk(KERN_INFO "wiegand removed");
 }
 
 MODULE_DESCRIPTION("Wiegand GPIO driver");
