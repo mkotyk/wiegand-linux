@@ -17,7 +17,7 @@ while [ 1 ]; do
   then  
     lastReadNum="${Array[0]}"
     echo "${Array[0]} Facility: ${Array[1]} Card: ${Array[2]}"
-    echo "${Array[0]} Facility: ${Array[1]} Card: ${Array[2]}" | nc -b -q 1 -u 192.168.1.255 9999 
+#    echo "${Array[0]} Facility: ${Array[1]} Card: ${Array[2]}" | nc -b -q 1 -u 192.168.1.255 9999 
   fi
   sleep 1;
 done
