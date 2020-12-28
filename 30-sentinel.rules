@@ -1,0 +1,2 @@
+ACTION=="add",DEVPATH=="/module/wiegand_gpio",SUBSYSTEM=="module",RUN+="/bin/chgrp -R sentinel /sys/kernel/wiegand"
+

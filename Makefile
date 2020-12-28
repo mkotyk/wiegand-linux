@@ -8,3 +8,7 @@ all: wiegand-gpio.c
 
 clean:
 	make -C $(KERNEL_DIR) M=$(PWD) clean
+
+reload:
+	sudo rmmod wiegand_gpio; sudo insmod ./wiegand-gpio.ko
+
